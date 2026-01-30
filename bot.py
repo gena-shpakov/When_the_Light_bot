@@ -8,7 +8,7 @@ import threading
 from flask import Flask
 import os
 
-from config import TOKEN
+from config import TOKEN, API_ID, API_HASH
 from data import user_queues, save_queues, user_notify_time, save_notify_time
 from parser import get_queue_schedule, get_queue_intervals, calculate_stats, get_last_posts
 from buttons import main_keyboard, queues_keyboard, notify_buttons
@@ -19,11 +19,11 @@ app = Flask('')
 def home():
     return "Bot is running"
 
-def run():
+def run_web():
     port = int(os.environ.get("PORT", 10000))
     app.run(host ='0.0.0.0', port=port)
     
-threading.Thread(target=run).start()
+threading.Thread(target=run_web).start()
 
 sent_notifications = {}
 last_post_ids = {}
