@@ -1,0 +1,14 @@
+*.session
+*.session-journal
+
+*.json
+*.db
+
+config.py
+.env
+
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.venv/
