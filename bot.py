@@ -17,7 +17,7 @@ app = Flask('')
 
 @app.route('/')
 def home():
-    return "Bot is running"
+    return "Ok", 200
 
 def run_web():
     port = int(os.environ.get("PORT", 10000))
