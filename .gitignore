@@ -4,7 +4,6 @@
 *.json
 *.db
 
-config.py
 .env
 
 __pycache__/
