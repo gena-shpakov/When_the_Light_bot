@@ -10,28 +10,27 @@ def main_keyboard():
         [KeyboardButton("🗑 Видалити чергу")],
         [KeyboardButton("⏰ Налаштувати сповіщення")]
     ]
-    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
-
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
 # Кнопки для вибору конкретної черги
 def queues_keyboard(queues):
+    if not queues:
+        return main_keyboard()
+        
     keyboard = []
     for q in queues:
-        if q["name"] == "Без назви":
-            text = q["queue"]
-        else:
-            text = f"{q['queue']} — {q['name']}"
+        # Формуємо текст кнопки так само, як бот очікує в handle_message
+        text = q["queue"] if q["name"] == "Без назви" else f"{q['queue']} — {q['name']}"
         keyboard.append([KeyboardButton(text)])
 
-    keyboard.append([KeyboardButton("Назад")])
-    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
-
+    keyboard.append([KeyboardButton("⬅ Назад")]) # Уніфікував назву кнопки "Назад"
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
 # Кнопки для вибору часу сповіщення
 def notify_buttons():
     keyboard = [
         [KeyboardButton("5"), KeyboardButton("15"), KeyboardButton("30")],
         [KeyboardButton("60"), KeyboardButton("120")],
-        [KeyboardButton("Назад")]
+        [KeyboardButton("⬅ Назад")]
     ]
-    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)

@@ -1,84 +1,83 @@
-import json
 import os
+from supabase import create_client, Client
+from config import SUPABASE_URL, SUPABASE_KEY
 
-QUEUES_FILE = "user_queues.json"
-NOTIFY_FILE = "user_notify_time.json"
+# Ініціалізація клієнта Supabase
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
+# Локальний кеш для швидкості (щоб не робити запит до бази при кожному кліку)
+user_queues = {}
+user_notify_time = {}
 
-# --------- ЧЕРГИ ---------
+# --------- СИНХРОНІЗАЦІЯ З БАЗОЮ ---------
 
-if os.path.exists(QUEUES_FILE):
-    with open(QUEUES_FILE, "r", encoding="utf-8") as f:
-        user_queues = json.load(f)
-else:
-    user_queues = {}
+def load_data():
+    """Завантажує всі дані з Supabase в оперативну пам'ять"""
+    try:
+        response = supabase.table("users").select("*").execute()
+        for row in response.data:
+            uid = str(row.get('user_id'))
+            user_queues[uid] = row.get('queues', [])
+            user_notify_time[uid] = row.get('notify_time', 30)
+        print(f"✅ Дані синхронізовано: {len(response.data)} користувачів")
+    except Exception as e:
+        print(f"❌ Помилка завантаження бази: {e}")
 
+def save_user_to_db(user_id: str):
+    """Зберігає дані конкретного користувача в Supabase"""
+    user_id = str(user_id)
+    data = {
+        "user_id": user_id,
+        "queues": user_queues.get(user_id, []),
+        "notify_time": user_notify_time.get(user_id, 30)
+    }
+    try:
+        supabase.table("users").upsert(data).execute()
+    except Exception as e:
+        print(f"❌ Помилка збереження в DB для {user_id}: {e}")
 
-def save_queues():
-    with open(QUEUES_FILE, "w", encoding="utf-8") as f:
-        json.dump(user_queues, f, ensure_ascii=False, indent=2)
-
+# --------- ФУНКЦІЇ ЧЕРГ ---------
 
 def get_queues(user_id: str):
-    """
-    Повертає список черг користувача:
-    [
-      {"queue": "4.1", "name": "Дім"},
-      {"queue": "5.2", "name": "Робота"}
-    ]
-    """
-    return user_queues.get(user_id, [])
-
+    return user_queues.get(str(user_id), [])
 
 def add_queue(user_id: str, queue: str, name: str):
+    user_id = str(user_id)
     if user_id not in user_queues:
         user_queues[user_id] = []
 
-    # Перевіряємо, чи така черга вже існує
     for q in user_queues[user_id]:
         if q["queue"] == queue:
             return False
 
-    user_queues[user_id].append({
-        "queue": queue,
-        "name": name
-    })
-    save_queues()
+    user_queues[user_id].append({"queue": queue, "name": name})
+    save_user_to_db(user_id) # Замість запису у файл
     return True
 
-
 def remove_queue(user_id: str, queue: str):
+    user_id = str(user_id)
     if user_id not in user_queues:
         return False
 
-    new_list = [q for q in user_queues[user_id] if q["queue"] != queue]
+    original_len = len(user_queues[user_id])
+    user_queues[user_id] = [q for q in user_queues[user_id] if q["queue"] != queue]
 
-    if len(new_list) == len(user_queues[user_id]):
+    if len(user_queues[user_id]) == original_len:
         return False 
 
-    user_queues[user_id] = new_list
-    save_queues()
+    save_user_to_db(user_id)
     return True
 
-
-# --------- СПОВІЩЕННЯ ---------
-
-if os.path.exists(NOTIFY_FILE):
-    with open(NOTIFY_FILE, "r", encoding="utf-8") as f:
-        user_notify_time = json.load(f)
-else:
-    user_notify_time = {}
-
-
-def save_notify_time():
-    with open(NOTIFY_FILE, "w", encoding="utf-8") as f:
-        json.dump(user_notify_time, f, ensure_ascii=False, indent=2)
-
+# --------- ФУНКЦІЇ СПОВІЩЕНЬ ---------
 
 def get_notify_time(user_id: str, default: int = 30):
-    return int(user_notify_time.get(user_id, default))
-
+    return int(user_notify_time.get(str(user_id), default))
 
 def set_notify_time(user_id: str, minutes: int):
+    user_id = str(user_id)
     user_notify_time[user_id] = minutes
-    save_notify_time()
+    save_user_to_db(user_id)
+
+# Функції для сумісності (якщо вони десь викликаються)
+def save_queues(): pass
+def save_notify_time(): pass
