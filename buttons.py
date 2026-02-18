@@ -23,7 +23,7 @@ def queues_keyboard(queues):
         text = q["queue"] if q["name"] == "Без назви" else f"{q['queue']} — {q['name']}"
         keyboard.append([KeyboardButton(text)])
 
-    keyboard.append([KeyboardButton("⬅ Назад")]) # Уніфікував назву кнопки "Назад"
+    keyboard.append([KeyboardButton("⬅ Назад")]) 
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
 # Кнопки для вибору часу сповіщення

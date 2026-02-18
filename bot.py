@@ -12,7 +12,7 @@ from data import (
     user_queues, user_notify_time, load_data, 
     get_queues, add_queue, remove_queue, set_notify_time
 )
-from parser import get_queue_schedule, get_queue_intervals, calculate_stats, get_last_posts
+from parser import get_queue_intervals, calculate_stats, get_last_posts
 from buttons import main_keyboard, queues_keyboard, notify_buttons
 
 # --- FLASK SERVER (Для Render) ---
@@ -29,8 +29,8 @@ def run_web():
 threading.Thread(target=run_web, daemon=True).start()
 
 # --- ГЛОБАЛЬНІ ЗМІННІ ДЛЯ МОНІТОРИНГУ ---
-last_post_hash = {}      # Зберігаємо хеш поста для кожного користувача/черги
-sent_notifications = {}  # Відстежуємо відправлені сповіщення (щоб не дублювати)
+last_post_hash = {}     
+sent_notifications = {} 
 
 # --- ДОПОМІЖНІ ФУНКЦІЇ ---
 async def safe_send(bot, chat_id, text, reply_markup=None):
@@ -56,40 +56,58 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def nowlight(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Перевірка статусу світла 'прямо зараз'"""
     user_id = str(update.effective_user.id)
     queues = get_queues(user_id)
     if not queues:
-        await update.message.reply_text("Спочатку додай свою чергу!", reply_markup=main_keyboard())
+        await update.message.reply_text("Спочатку додай свою чергу!")
         return
 
     q_num = queues[0]["queue"]
     intervals = await get_queue_intervals(q_num)
     if not intervals:
-        await update.message.reply_text("На жаль, дані для вашої черги поки відсутні.")
+        await update.message.reply_text("Дані відсутні.")
         return
 
     now = datetime.now()
     is_off = False
-    next_change = "невідомо"
+    next_change = None
     
+    # Створюємо список всіх подій (початок і кінець)
+    events = []
     for s_str, e_str in intervals:
-        start_dt = parse_time_safe(s_str, now)
-        end_dt = parse_time_safe(e_str, now)
-        if end_dt <= start_dt: end_dt += timedelta(days=1)
+        s_dt = parse_time_safe(s_str, now)
+        e_dt = parse_time_safe(e_str, now)
         
-        if start_dt <= now < end_dt:
+        # Обробка інтервалів, що переходять через північ
+        if e_dt <= s_dt:
+            # Якщо зараз ніч і ми після початку, але перед кінцем
+            if now < e_dt: 
+                s_dt -= timedelta(days=1)
+            else:
+                e_dt += timedelta(days=1)
+        
+        events.append((s_dt, e_dt, s_str, e_str))
+
+    # Перевіряємо поточний стан
+    for s_dt, e_dt, s_str, e_str in events:
+        if s_dt <= now < e_dt:
             is_off = True
-            next_change = e_str
+            next_change = e_str # Світло з'явиться в кінці інтервалу
             break
-        elif start_dt > now and (next_change == "невідомо" or start_dt < parse_time_safe(next_change, now)):
-            next_change = s_str
+    
+    # Якщо світло є, шукаємо найближче вимкнення
+    if not is_off:
+        future_starts = [s_dt for s_dt, e_dt, s_str, e_str in events if s_dt > now]
+        if future_starts:
+            next_event_dt = min(future_starts)
+            # Знаходимо рядок часу для цього dt
+            next_change = [s_str for s_dt, e_dt, s_str, e_str in events if s_dt == next_event_dt][0]
 
     status = f"⚡ Черга {q_num}\n\n"
     if is_off:
-        status += f"🔌 ЗАРАЗ НЕМАЄ СВІТЛА\n⛔ Очікується увімкнення о {next_change}"
+        status += f"🔌 ЗАРАЗ НЕМАЄ СВІТЛА\n⛔ Очікується увімкнення о {next_change or 'невідомо'}"
     else:
-        status += f"💡 ЗАРАЗ Є СВІТЛО\n🟢 Вимкнення за графіком о {next_change}"
+        status += f"💡 ЗАРАЗ Є СВІТЛО\n🟢 Вимкнення за графіком о {next_change or 'немає за графіком'}"
 
     await update.message.reply_text(status, reply_markup=main_keyboard())
 
@@ -114,7 +132,6 @@ async def periodic_check(context: ContextTypes.DEFAULT_TYPE):
             q_name = q_data["name"]
             user_q_key = f"{user_id}_{q_num}"
 
-            # 1. Перевірка оновлення графіка (новий пост)
             if last_post_hash.get(user_q_key) != post_hash:
                 intervals = await get_queue_intervals(q_num)
                 if intervals:
@@ -123,66 +140,127 @@ async def periodic_check(context: ContextTypes.DEFAULT_TYPE):
                     await safe_send(app.bot, uid_int, msg)
                     last_post_hash[user_q_key] = post_hash
 
-            # 2. Сповіщення про вимкнення за X хвилин
             intervals = await get_queue_intervals(q_num)
             if not intervals: continue
 
             for s_str, e_str in intervals:
                 start_dt = parse_time_safe(s_str, now)
-                notify_time = start_dt - timedelta(minutes=notify_min)
-                notif_key = f"{user_id}_{q_num}_{s_str}_{start_dt.day}"
+                
+                if start_dt < now - timedelta(hours=12):
+                    start_dt += timedelta(days=1)
+                
+                notify_time_target = start_dt - timedelta(minutes=notify_min)
+                
+                notif_key = f"{user_id}_{q_num}_{s_str}_{start_dt.strftime('%Y%m%d')}"
 
-                if notify_time <= now <= start_dt and notif_key not in sent_notifications:
-                    alert = f"⏰ Через {notify_min} хв СВІТЛО БУДЕ ВИМКНЕНО!\nЧерга: {q_num} ({q_name})"
-                    await safe_send(app.bot, uid_int, alert)
-                    sent_notifications[notif_key] = True
+                if now >= notify_time_target and now < start_dt:
+                    if notif_key not in sent_notifications:
+                        alert = f"⏰ Через {notify_min} хв СВІТЛО БУДЕ ВИМКНЕНО!\nЧерга: {q_num} ({q_name})"
+                        await safe_send(app.bot, uid_int, alert)
+                        sent_notifications[notif_key] = True
+
+        keys_to_delete = [k for k, v in sent_notifications.items() if k.startswith(user_id) and "some_date_logic" in k]
 
 # --- ОБРОБКА ПОВІДОМЛЕНЬ МЕНЮ ---
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
     user_id = str(update.effective_user.id)
+    
+    if text == "⬅ Назад":
+        context.user_data["action"] = None
+        await update.message.reply_text("Головне меню:", reply_markup=main_keyboard())
+        return
+    
+    if text == "⚡ Перевірити чергу":
+        user_id = str(update.effective_user.id)
+        queues = get_queues(user_id)
+        if not queues:
+            await update.message.reply_text("Твій список порожній. Додай чергу, щоб перевірити її статус.", reply_markup=main_keyboard())
+            return
+        
+        q_num = queues[0]["queue"]
+        intervals = await get_queue_intervals(q_num)
+        stats = await calculate_stats(q_num)
+        
+        if not intervals or stats is None:
+            await update.message.reply_text(
+                f"⚠️ **Дані тимчасово недоступні.**\n\n"
+                "Не вдалося отримати графік. Можливі причини:\n"
+                "• Проблеми зі з'єднанням (як у твоїй помилці NetworkError)\n"
+                "• Обленерго ще не оновило пост у Telegram\n"
+                "• Змінився формат повідомлень на каналі\n\n"
+                "Спробуй натиснути кнопку ще раз через хвилину.",
+                parse_mode="Markdown",
+                reply_markup=main_keyboard()
+            )
+            return
+        
+        schedule_text = "\n".join([f"• {s} — {e}" for s, e in intervals])
+        
+        response = (
+            f"📅 *Графік на {stats['date']}* (черга {q_num}):\n\n"
+            f"{schedule_text}\n\n"
+            f"📊 *Статистика:*\n"
+            f"🔌 Без світла: {stats['total_off']}\n"
+            f"💡 Зі світлом: {stats['total_on']}\n"
+            f"🔄 Кількість вимкнень: {stats['num_outages']}"
+        )
+        await update.message.reply_text(response, parse_mode="Markdown", reply_markup=main_keyboard())
+        return
 
     if text == "➕ Додати чергу":
         context.user_data["action"] = "add"
-        await update.message.reply_text("Введи чергу (наприклад: 4.1 або 4.1 Дім)")
+        await update.message.reply_text("Введи чергу (наприклад: 4.1 або 4.1 Дім)", parse_mode="Markdown")
+        return
     
     elif text == "🗑 Видалити чергу":
+        queues = get_queues(user_id)
+        if not queues:
+            await update.message.reply_text("Немає чого видаляти")
+            return
         context.user_data["action"] = "del"
-        await update.message.reply_text("Яку чергу видалити?")
+        await update.message.reply_text("Яку чергу видалити?", reply_markup=queues_keyboard(queues))
+        return
 
     elif text == "📋 Мої черги":
         queues = get_queues(user_id)
         if not queues:
             await update.message.reply_text("Твій список порожній.")
         else:
-            res = "🔢 Твої черги:\n" + "\n".join([f"• {q['queue']} ({q['name']})" for q in queues])
-            await update.message.reply_text(res, reply_markup=queues_keyboard(queues))
+            res = "🔢 Твої черги:*\n\n" + "\n".join([f"• {q['queue']} ({q['name']})" for q in queues])
+            await update.message.reply_text(res, parse_mode="Markdown", reply_markup=queues_keyboard(queues))
+            return
 
     elif text == "⏰ Налаштувати сповіщення":
         await update.message.reply_text("Обери час сповіщення:", reply_markup=notify_buttons())
+        return
 
     elif text in ["5", "15", "30", "60", "120"]:
         set_notify_time(user_id, int(text))
         await update.message.reply_text(f"✅ Готово! Буду попереджати за {text} хв.")
+        return
 
     elif text == "📅 Коли світло?":
         await nowlight(update, context)
-
+        return
+    
     # Логіка введення даних після натискання кнопок
-    elif context.user_data.get("action") == "add":
+    action = context.user_data.get("action")
+    if action == "add":
         context.user_data["action"] = None
-        parts = text.split(maxsplit=1)
-        if add_queue(user_id, parts[0], parts[1] if len(parts) > 1 else "Без назви"):
+        parts = text.text.split(maxsplit=1)
+        if add_queues(user_id, parts[0], parts[1] if len(parts) > 1 else "Без назви"):
             await update.message.reply_text("✅ Додано успішно!", reply_markup=main_keyboard())
         else:
-            await update.message.reply_text("❌ Помилка: черга вже є або невірний формат.")
+            await update.message.reply_text("❌ Помилка: черга вже є або невірний формат")
 
-    elif context.user_data.get("action") == "del":
+    elif action == "del":
         context.user_data["action"] = None
-        if remove_queue(user_id, text.strip()):
-            await update.message.reply_text("🗑 Видалено.", reply_markup=main_keyboard())
+        queue_to_del = text.split()[0]
+        if remove_queue(user_id, queue_to_del):
+            await update.message.reply_text(f"🗑 Видалено чергу {queue_to_del}", reply_markup=main_keyboard())
         else:
-            await update.message.reply_text("❌ Такої черги не знайдено.")
+            await update.message.reply_text("❌ Чергу не знайдено")
 
 # --- ЗАПУСК БОТА ---
 def main():
